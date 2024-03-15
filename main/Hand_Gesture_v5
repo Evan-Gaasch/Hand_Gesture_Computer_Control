@@ -1,0 +1,180 @@
+import cv2 as cv
+import mediapipe as mp
+import pyautogui, numpy, math
+import pydirectinput as pd
+mp_hands = mp.solutions.hands
+
+#set up initial screen size
+global xSize,ySize
+xSize,ySize = pyautogui.size()
+global game_mode
+game_mode = input("Would you like to initate this system in game mode? Game mode allows for mouse control in games but is more unstable. (y/n)") == "y"
+
+last_index_x, last_index_y,last_index_z = 0,0,0 #default starting values
+last_average_x, last_average_y = 0,0
+last_thumb_index_distance = 0.0
+
+#set up subroutines
+
+def click(thumb_x,thumb_y,index_finger_x,index_finger_y):
+    global game_mode 
+    
+    dist = math.sqrt((thumb_x-index_finger_x)**2 + (thumb_y-index_finger_y)**2)
+    #print(dist)
+    if game_mode and dist < 0.08:
+        pd.click()
+        
+    elif dist <0.08:    #tune
+        #pyautogui.click() #redundancy
+        pyautogui.mouseDown()
+        
+    else:
+        pyautogui.mouseUp()
+
+def move_mouse(average_x,average_y,last_average_x,last_average_y):
+    global xSize,ySize, game_mode
+    
+    xPos = int(xSize-(xSize * average_x))#pyautogui uses left to right not right to left for x
+    yPos = int(ySize * average_y)
+
+    movement_time = 0.5*math.sqrt(abs(index_finger_x -last_index_x))
+
+    if abs(average_x -last_average_x) >0.01 and abs(average_y -last_average_y) >0.01: 
+        
+        pd.moveTo(xPos,yPos, movement_time) #,pyautogui.easeOutQuad) #time factor for interpolation in case of latency or vision system errors
+    
+    return(index_finger_x,index_finger_y)
+    
+    
+def scroll(thumb_y,last_thumb_y,average_x,last_average_x): 
+    global xSize, ySize
+    
+    deltaYPos = thumb_y - last_thumb_y
+    
+    deltaAverageX = average_x-last_average_x
+
+    scroll_amount = int((deltaYPos*ySize)*5)
+    
+    if deltaAverageX <0.01 and deltaYPos > 0.02: #tune
+        pd.scroll(scroll_amount) #tune for optimal scrolling effectiveness
+        
+def switchTab(index_finger_x,index_finger_y,thumb_x,thumb_y,last_thumb_index_distance,average_x, last_average_x):
+    dist = math.sqrt((thumb_x-index_finger_x)**2 + (thumb_y-index_finger_y)**2)
+    deltaDist = dist-last_thumb_index_distance
+    deltaAverageX = abs( average_x - last_average_x)
+         
+    if deltaDist > 0.02 and dist >0.2 and deltaAverageX <0.02: #open and opening hand, not moving side to side much
+        pyautogui.keyDown('alt')
+        pyautogui.press('tab')
+        pyautogui.keyUp('alt')
+    
+    last_thumb_index_distance = dist
+    return(last_thumb_index_distance)
+
+def movePlayer(index_finger_z):
+    global game_mode
+    if game_mode:
+            #control w and s
+        if index_finger_z > -0.03: #default value is -0.05
+            pd.keyUp("w")
+            pd.keyDown("s")
+        elif index_finger_z < -0.15:
+            pd.keyUp("s")
+            pd.keyDown("w") #forwards
+        else:
+            pd.keyUp("w")
+            pd.keyUp("s")
+    else:
+         return
+         
+def landmark_pos(hand_landmarks):
+        #index
+    index_finger_x = hand_landmarks.landmark[mp_hands.HandLandmark.INDEX_FINGER_TIP].x
+    index_finger_y = hand_landmarks.landmark[mp_hands.HandLandmark.INDEX_FINGER_TIP].y
+    index_finger_z = hand_landmarks.landmark[mp_hands.HandLandmark.INDEX_FINGER_TIP].z
+        #thumb
+    thumb_x = hand_landmarks.landmark[mp_hands.HandLandmark.THUMB_TIP].x
+    thumb_y = hand_landmarks.landmark[mp_hands.HandLandmark.THUMB_TIP].y
+        #middle
+    middle_finger_x = hand_landmarks.landmark[mp_hands.HandLandmark.MIDDLE_FINGER_TIP].x
+    middle_finger_y = hand_landmarks.landmark[mp_hands.HandLandmark.MIDDLE_FINGER_TIP].y
+        #ring
+    ring_finger_x = hand_landmarks.landmark[mp_hands.HandLandmark.RING_FINGER_TIP].x
+    ring_finger_x = hand_landmarks.landmark[mp_hands.HandLandmark.RING_FINGER_TIP].y
+        #pinky
+    pinky_x = hand_landmarks.landmark[mp_hands.HandLandmark.PINKY_TIP].x
+    pinky_y = hand_landmarks.landmark[mp_hands.HandLandmark.PINKY_TIP].y
+    
+    #average x and y for mouse pointer
+    average_x = (thumb_x + index_finger_x + middle_finger_x+ring_finger_x+pinky_x)/5
+    average_y = (thumb_y + index_finger_y + middle_finger_y+ring_finger_y+pinky_y)/5
+    
+    return(average_x,average_y)
+         
+def interact(hand_landmarks,thumb_x,thumb_y): #shared control between e for interact and 
+    global game_mode
+    
+    #right click also whenever a fist is made in addition to interact, remove if this is a problem
+    pd.right_click() #will result in always scannning when trying to pick up objects or accidental object pick-up when scanning (lethal company) but this is not a serious issue
+    
+    if game_mode: #and pyautogui.getActiveWindowTitle()== 'Lethal Company':#these controls are specific to lethal company
+        ring_pip_x = hand_landmarks.landmark[mp_hands.HandLandmark.RING_FINGER_PIP].x
+        ring_pip_y = hand_landmarks.landmark[mp_hands.HandLandmark.RING_FINGER_PIP].y
+         
+        dist = math.sqrt((thumb_x-ring_pip_x)**2 + (thumb_y-ring_pip_y)**2) #compute distance between index finger and ring finger middle, when it is low it can "only" be because of someone making a fist
+        if dist <0.02: #tune
+            pd.keyDown("e") #press and hold to pick up items in lethal company specifically
+            
+        else:
+            pd.keyUp("e")
+
+# For webcam input:
+cap = cv.VideoCapture(0)
+with mp_hands.Hands(
+    model_complexity=0,
+    min_detection_confidence=0.5,
+    min_tracking_confidence=0.5) as hands:
+         
+  while cap.isOpened():
+    ret, frame = cap.read()
+    if not ret:
+      print("Ignoring empty camera frame.")
+      # If loading a video, use 'break' instead of 'continue'.
+      continue
+
+    # To improve performance, optionally mark the image as not writeable to
+    # pass by reference.
+    frame.flags.writeable = False
+    frame = cv.cvtColor(frame, cv.COLOR_BGR2RGB)
+    results = hands.process(frame)
+    if results.multi_hand_landmarks:
+        for hand_landmarks in results.multi_hand_landmarks: #all main work is done in this loop, it may cause a little lag? experiment with removing
+            #get landmark positions
+                #index
+            index_finger_x = hand_landmarks.landmark[mp_hands.HandLandmark.INDEX_FINGER_TIP].x
+            index_finger_y = hand_landmarks.landmark[mp_hands.HandLandmark.INDEX_FINGER_TIP].y
+            index_finger_z = hand_landmarks.landmark[mp_hands.HandLandmark.INDEX_FINGER_TIP].z
+                #thumb
+            thumb_x = hand_landmarks.landmark[mp_hands.HandLandmark.THUMB_TIP].x
+            thumb_y = hand_landmarks.landmark[mp_hands.HandLandmark.THUMB_TIP].y
+         
+            average_x,average_y = landmark_pos(hand_landmarks) #compute averages of the tips of the fingers
+            
+            #call subroutines given finger positions
+            click(thumb_x, thumb_y, index_finger_x,index_finger_y)
+            scroll(thumb_y,last_thumb_y,average_x,last_average_x)
+            movePlayer(index_finger_z)
+            move_mouse(average_x,average_y,last_average_x,last_average_y)
+            interact(hand_landmarks, thumb_x,thumb_y)
+            last_thumb_index_distance = switchTab(index_finger_x,index_finger_y,thumb_x,thumb_y,last_thumb_index_distance,average_x,last_average_x)
+            
+         
+            #set "last" x/y values
+            last_index_x = index_finger_x
+            last_index_y = index_finger_y
+            last_average_x = average_x
+            last_average_y = average_y
+                  
+#if there is an error, code will exit the loop above
+cap.release()
+print("camera connection error. please restart code")
