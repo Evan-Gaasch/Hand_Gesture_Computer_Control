@@ -1,0 +1,227 @@
+#updated because my old method was deprecated.
+import cv2 as cv
+import mediapipe as mp
+from mediapipe.tasks import python
+from mediapipe.tasks.python import vision
+import pyautogui, numpy, math
+
+#set up initial screen size
+global xSize,ySize
+xSize,ySize = pyautogui.size()
+global game_mode
+game_mode = input("Would you like to initate this system in game mode? Game mode allows for mouse control and movement in games using the W and S keys. (y/n)") == "y"
+
+model_path = "C:/Users/Gaasch_Gaming_PC/Documents/AI_Project/hand_landmarker.task"
+
+global last_index_x, last_index_y,last_index_z, last_average_x, last_average_y, last_thumb_index_distance,last_thumb_y,last_thumb_x
+
+last_index_x, last_index_y,last_index_z = 0,0,0 #default starting values
+last_average_x, last_average_y = 0,0
+last_thumb_index_distance = 0.0
+last_thumb_y = 0
+last_thumb_x = 0
+
+#to prevent excess pyautogui calls:
+global forwards, backwards, interacted, clicked
+forwards = False
+backwards = False
+interacted = False
+clicked = False
+
+BaseOptions = mp.tasks.BaseOptions
+HandLandmarker = mp.tasks.vision.HandLandmarker
+HandLandmarkerOptions = mp.tasks.vision.HandLandmarkerOptions
+HandLandmarkerResult = mp.tasks.vision.HandLandmarkerResult
+VisionRunningMode = mp.tasks.vision.RunningMode
+
+#set up subroutines
+
+def click(thumb_x,thumb_y,index_finger_x,index_finger_y,last_thumb_index_distance): #index and thumb together
+    global clicked
+    
+    dist = math.sqrt((thumb_x-index_finger_x)**2 + (thumb_y-index_finger_y)**2)
+    delta_dist = dist-last_thumb_index_distance
+    #print(dist)
+    if delta_dist >0.01:
+        if dist <0.2 and not clicked:    #tune
+            pyautogui.mouseDown()
+            clicked = True
+            
+        elif dist > 0.3 and clicked:
+            pyautogui.mouseUp()
+            clicked = False
+    #print(clicked)
+
+def move_mouse(average_x,average_y,last_average_x,last_average_y,index_finger_x,index_finger_y): #move hand
+    global xSize,ySize
+    
+    xPos = int(xSize-(xSize * average_x))#pyautogui uses left to right not right to left for x
+    yPos = int(ySize * average_y)
+
+    if abs(average_x -last_average_x) >0.015 and abs(average_y -last_average_y) >0.015: 
+        
+        pyautogui.moveTo(xPos, yPos) #not asynchronous but prevents "skipping" of the cursor, there may be better asynchronous way that doesn't slow down loop
+    
+    return(index_finger_x,index_finger_y)
+    
+    
+def scroll(thumb_y,last_thumb_y,average_x,last_average_x): 
+    global xSize, ySize
+    
+    deltaYPos = thumb_y - last_thumb_y
+    
+    deltaAverageX = average_x-last_average_x
+
+    scroll_amount = int((deltaYPos*ySize)*5)
+    
+    if abs(deltaAverageX) <0.02 and abs(deltaYPos) > 0.07: #tune
+        pyautogui.scroll(scroll_amount) #tune for optimal scrolling effectiveness
+        
+def switchTab(index_finger_x,index_finger_y,thumb_x,thumb_y,last_thumb_index_distance,average_x, last_average_x): #open hand fast to switch tabs
+    dist = math.sqrt((thumb_x-index_finger_x)**2 + (thumb_y-index_finger_y)**2)
+    deltaDist = dist-last_thumb_index_distance
+    deltaAverageX = abs( average_x - last_average_x)
+         
+    if deltaDist > 0.8 and dist >0.5: #open and opening hand, not moving side to side much
+        pyautogui.keyDown('alt')
+        pyautogui.press('tab')
+        pyautogui.keyUp('alt')
+    
+    last_thumb_index_distance = dist
+    return(last_thumb_index_distance)
+
+def movePlayer(index_finger_z, last_index_z):
+    global game_mode, forwards,backwards
+    if game_mode:
+            #control w and s
+        if index_finger_z > -0.03 and not backwards: #default value is -0.05
+            pyautogui.keyUp('w')
+            pyautogui.keyDown('s')
+            backwards = True
+            forwards = False
+            
+        elif index_finger_z < -0.15 and not forwards:
+            pyautogui.keyUp('s')
+            pyautogui.keyDown('w') #forwards
+            backwards = False
+            forwards = True
+            
+        else:
+            pyautogui.keyUp('s')
+            pyautogui.keyUp('w')
+            forwards = False
+            backwards = False
+    else:
+         return
+         
+def landmark_pos(hand_landmarks):
+    if hand_landmarks:
+        hand = hand_landmarks[0]
+        #print(hand)
+    else:
+        print("missing")
+
+        #index (all numbers taken from documentation)
+    index_tip = hand[8]
+        #thumb
+    thumb_tip = hand[4]
+        #middle
+    middle_tip = hand[12]
+        #ring
+    ring_tip = hand[16]
+        #pinky
+    pinky_tip = hand[20]
+
+    ring_pip = hand[14]
+    
+    #average x and y for mouse pointer
+    average_x = (thumb_tip.x + index_tip.x + middle_tip.x+ring_tip.x+pinky_tip.x)/5
+    average_y = (thumb_tip.y + index_tip.y + middle_tip.y+ring_tip.y+pinky_tip.y)/5
+    
+    return(index_tip,thumb_tip, middle_tip,ring_tip,pinky_tip,ring_pip,average_x,average_y)
+         
+def interact(thumb_x,thumb_y,ring_pip_x,ring_pip_y): #fist -> e in game mode
+    global interacted
+    dist = math.sqrt((thumb_x-ring_pip_x)**2 + (thumb_y-ring_pip_y)**2) #compute distance between index finger and ring finger middle, when it is low it can "only" be because of someone making a fist
+    if dist <0.02 and not interacted: #tune
+        pyautogui.keyDown('e')
+        interacted = True
+            
+    elif dist >0.03 and interacted:
+        pyautogui.keyUp('e')
+        interacted = False
+
+def main(result: HandLandmarkerResult, output_image, timestamp_ms):
+    global last_index_x, last_index_y,last_index_z, last_average_x, last_average_y, last_thumb_index_distance, last_thumb_x, last_thumb_y, game_mode
+    
+    hand_landmarks = result.hand_landmarks
+
+    if not hand_landmarks: #no hand visible
+        return ()
+    
+    index_tip,thumb_tip, middle_tip,ring_tip,pinky_tip,ring_pip,average_x,average_y = landmark_pos(hand_landmarks)
+
+    thumb_x = thumb_tip.x
+    thumb_y = thumb_tip.y
+    index_finger_x = index_tip.x
+    index_finger_y = index_tip.y
+    index_finger_z = index_tip.z
+    ring_pip_x = ring_pip.x
+    ring_pip_y = ring_pip.y
+    ring_tip_x = ring_tip.x
+    ring_tip_y = ring_tip.y
+    
+    
+    click(thumb_x, thumb_y, index_finger_x,index_finger_y,last_thumb_index_distance)
+    scroll(thumb_y,last_thumb_y,average_x,last_average_x)
+    move_mouse(average_x,average_y,last_average_x,last_average_y,index_finger_x,index_finger_y)
+    
+    last_thumb_index_distance = switchTab(index_finger_x,index_finger_y,thumb_x,thumb_y,last_thumb_index_distance,average_x,last_average_x)
+    last_index_x = index_finger_x
+    last_index_y = index_finger_y
+    last_index_z = index_finger_z
+    last_average_x = average_x
+    last_average_y = average_y
+    last_thumb_x = thumb_x
+    last_thumb_y = thumb_y
+    if game_mode:
+        movePlayer(index_tip.z,last_index_z)
+        #interact(thumb_x,thumb_y,ring_pip_x,ring_pip_y,last_thumb_x,)
+
+
+
+options = HandLandmarkerOptions(
+    running_mode = VisionRunningMode.LIVE_STREAM,
+    base_options=BaseOptions(model_asset_path=model_path),
+    num_hands = 1, #1 handed control
+    min_hand_presence_confidence = 0.5,
+    min_hand_detection_confidence = 0.3,
+    result_callback = main,
+    
+)
+with HandLandmarker.create_from_options(options) as landmarker:
+    frame_idx = 0
+    # For webcam input:
+    cap = cv.VideoCapture(0)
+    while cap.isOpened():
+        if frame_idx%2 == 0:
+            frame_idx +=1 #skip every third frame
+            pass
+        
+        ret, frame = cap.read()
+        if not ret:
+            print("Ignoring empty camera frame.")
+            # If loading a video, use 'break' instead of 'continue'.
+            continue
+
+        # To improve performance, optionally mark the image as not writeable to
+        # pass by reference.
+        frame.flags.writeable = False
+        frame = cv.cvtColor(frame, cv.COLOR_BGR2RGB)
+        mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=frame)
+        landmarker.detect_async(mp_image, timestamp_ms=frame_idx)
+        frame_idx += 1
+                  
+#if there is an error, code will exit the loop above
+cap.release()
+print("camera connection error. please restart code")
